@@ -1,7 +1,12 @@
+// ============================================
+// USER AUTHENTICATION ROUTES
+// ============================================
+// Handles mobile user registration, login, and profile management
+
 const express = require('express');
-const { 
-  registerUser, 
-  loginUser, 
+const {
+  registerUser,
+  loginUser,
   logoutUser,
   forgotPassword,
   resetPassword,
@@ -15,18 +20,22 @@ const { protect } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// Public routes
-router.post('/register', registerUser);
-router.post('/login', loginUser);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
+// ============================================
+// PUBLIC ROUTES
+// ============================================
+router.post('/register', registerUser);              // User registration
+router.post('/login', loginUser);                    // User login
+router.post('/forgot-password', forgotPassword);     // Request password reset
+router.post('/reset-password', resetPassword);       // Reset password with token
 
-// Protected routes
-router.post('/logout', protect, logoutUser);
-router.get('/profile', protect, getUserProfile);
-router.put('/profile', protect, updateUserProfile);
-router.put('/change-password', protect, changePassword);
-router.delete('/delete', protect, deleteAccount);
-router.post('/upload-avatar', protect, uploadAvatar);  // No multer middleware
+// ============================================
+// PROTECTED ROUTES (Require Authentication)
+// ============================================
+router.post('/logout', protect, logoutUser);                 // User logout
+router.get('/profile', protect, getUserProfile);             // Get user profile
+router.put('/profile', protect, updateUserProfile);          // Update user profile
+router.put('/change-password', protect, changePassword);     // Change password
+router.delete('/delete', protect, deleteAccount);            // Delete account
+router.post('/upload-avatar', protect, uploadAvatar);        // Upload profile picture
 
 module.exports = router;

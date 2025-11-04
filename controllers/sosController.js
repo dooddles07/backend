@@ -282,10 +282,84 @@ const getAllActiveSOS = async (req, res) => {
   }
 };
 
+// Resolve SOS (Admin marks as resolved)
+const resolveSOS = async (req, res) => {
+  try {
+    const { sosId } = req.params;
+
+    if (!sosId) {
+      return res.status(400).json({ message: 'SOS ID is required' });
+    }
+
+    const sos = await SOS.findById(sosId);
+
+    if (!sos) {
+      return res.status(404).json({ message: 'SOS not found' });
+    }
+
+    if (sos.status !== 'active') {
+      return res.status(400).json({
+        message: `SOS is already ${sos.status}`,
+        currentStatus: sos.status
+      });
+    }
+
+    sos.status = 'resolved';
+    sos.resolvedAt = new Date();
+    await sos.save();
+
+    res.status(200).json({
+      message: 'SOS marked as resolved successfully',
+      sos: {
+        id: sos._id,
+        username: sos.username,
+        status: sos.status,
+        resolvedAt: sos.resolvedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Resolve SOS Error:', error);
+    res.status(500).json({
+      message: 'Failed to resolve SOS',
+      error: error.message
+    });
+  }
+};
+
+// Get all SOS history (cancelled and resolved)
+const getAllSOSHistory = async (req, res) => {
+  try {
+    const { limit = 50, status } = req.query;
+
+    const query = status ? { status } : { status: { $in: ['resolved', 'cancelled'] } };
+
+    const sosHistory = await SOS.find(query)
+      .populate('userId', 'fullname email contactNumber')
+      .sort({ resolvedAt: -1, timestamp: -1 })
+      .limit(parseInt(limit));
+
+    res.status(200).json({
+      message: 'SOS history retrieved successfully',
+      count: sosHistory.length,
+      history: sosHistory
+    });
+
+  } catch (error) {
+    console.error('Get All SOS History Error:', error);
+    res.status(500).json({
+      message: 'Failed to retrieve SOS history',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   sendSOS,
   cancelSOS,
   getSOSHistory,
   getActiveSOS,
-  getAllActiveSOS
+  getAllActiveSOS,
+  resolveSOS,
+  getAllSOSHistory
 };

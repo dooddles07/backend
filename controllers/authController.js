@@ -85,8 +85,12 @@ const loginUser = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user._id, username: user.username }, 
-      JWT_SECRET, 
+      {
+        id: user._id,
+        username: user.username,
+        tokenType: 'user'  // Required for dual authentication middleware
+      },
+      JWT_SECRET,
       { expiresIn: '7d' }
     );
 

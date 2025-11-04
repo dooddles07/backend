@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema({
+const adminSchema = new mongoose.Schema({
   fullname: {
     type: String,
     required: true,
@@ -23,6 +23,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  role: {
+    type: String,
+    enum: ['super_admin', 'admin', 'responder'],
+    default: 'admin'
+  },
   contactNumber: {
     type: String,
     default: ''
@@ -31,6 +36,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  department: {
+    type: String,
+    default: ''
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  lastLogin: {
+    type: Date
+  },
   resetPasswordToken: String,
   resetPasswordExpires: Date,
 }, {
@@ -38,6 +54,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Note: email and username indexes are automatically created by 'unique: true'
-// No need to manually define them here
+// Only define additional indexes here
+adminSchema.index({ role: 1 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model('Admin', adminSchema);
