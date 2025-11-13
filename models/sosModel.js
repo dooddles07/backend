@@ -13,7 +13,7 @@ const sosSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false
   },
   latitude: {
     type: Number,
@@ -68,7 +68,6 @@ const sosSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Create geospatial index for location queries
 sosSchema.index({ location: '2dsphere' });
 sosSchema.index({ username: 1, status: 1 });
 sosSchema.index({ timestamp: -1 });

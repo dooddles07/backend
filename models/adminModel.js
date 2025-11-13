@@ -53,8 +53,6 @@ const adminSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Note: email and username indexes are automatically created by 'unique: true'
-// Only define additional indexes here
 adminSchema.index({ role: 1 });
 
 module.exports = mongoose.model('Admin', adminSchema);

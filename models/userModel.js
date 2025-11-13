@@ -37,7 +37,4 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Note: email and username indexes are automatically created by 'unique: true'
-// No need to manually define them here
-
 module.exports = mongoose.model('User', userSchema);

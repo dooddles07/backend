@@ -1,8 +1,3 @@
-// ============================================
-// SOS EMERGENCY ROUTES
-// ============================================
-// Handles emergency SOS alerts and location tracking
-
 const express = require('express');
 const {
   sendSOS,
@@ -13,27 +8,21 @@ const {
   resolveSOS,
   getAllSOSHistory
 } = require('../controllers/sosController');
-const { protect } = require('../middleware/authMiddleware');
+const { sosValidation } = require('../middleware/validation');
 
 const router = express.Router();
 
-// ============================================
-// PUBLIC ROUTES (No auth for emergencies)
-// ============================================
-router.post('/send', sendSOS);         // Send SOS alert with location
-router.post('/cancel', cancelSOS);     // Cancel active SOS alert
+// Public Routes
+router.post('/send', sosValidation.send, sendSOS);
+router.post('/cancel', sosValidation.cancel, cancelSOS);
 
-// ============================================
-// QUERY ROUTES
-// ============================================
-router.get('/history/:username', getSOSHistory);    // Get user's SOS history
-router.get('/active/:username', getActiveSOS);      // Get user's active SOS
-router.get('/all-active', getAllActiveSOS);         // Get all active SOS alerts
-router.get('/all-history', getAllSOSHistory);       // Get all resolved/cancelled SOS
+// Query Routes
+router.get('/history/:username', getSOSHistory);
+router.get('/active/:username', getActiveSOS);
+router.get('/all-active', getAllActiveSOS);
+router.get('/all-history', getAllSOSHistory);
 
-// ============================================
-// ADMIN ACTIONS
-// ============================================
-router.patch('/resolve/:sosId', resolveSOS);        // Admin resolves SOS alert
+// Admin Actions
+router.patch('/resolve/:sosId', sosValidation.resolve, resolveSOS);
 
 module.exports = router;

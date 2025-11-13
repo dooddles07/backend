@@ -1,200 +1,167 @@
 /**
- * ============================================
- * MESSAGE CONTROLLER
- * ============================================
- *
+ * Message Controller
  * Handles messaging operations between users (mobile) and admins (web)
- * Supports conversations, message sending, and real-time communication
  */
 
 const { Message, Conversation } = require('../models/messageModel');
 const User = require('../models/userModel');
 const Admin = require('../models/adminModel');
-
-// ============================================
-// CONVERSATION MANAGEMENT
-// ============================================
+const cloudinary = require('../config/cloudinary');
+const { MESSAGE, CONVERSATION, CLOUDINARY, ADMIN_ROLES } = require('../config/constants');
+const { hashPassword } = require('../utils/passwordService');
+const {
+  sendCreated,
+  sendOk,
+  sendBadRequest,
+  sendUnauthorized,
+  sendNotFound,
+  sendServerError
+} = require('../utils/responseHelper');
 
 /**
- * Get or create a conversation between user and admin
- *
- * @route POST /api/messages/conversation
- * @access Protected (User or Admin)
- * @body {String} userId - ID of the user (optional, will use authenticated user if not provided)
- * @body {String} adminId - ID of the admin (optional)
+ * Get message preview text based on type
+ */
+const getMessagePreview = (messageType, text) => {
+  switch (messageType) {
+    case 'image':
+      return '📷 Image';
+    case 'video':
+      return '🎥 Video';
+    case 'audio':
+      return '🎤 Voice message';
+    default:
+      return text ? text.substring(0, MESSAGE.PREVIEW_LENGTH) : '';
+  }
+};
+
+/**
+ * Get or Create Conversation
  */
 const getOrCreateConversation = async (req, res) => {
   try {
-    console.log('\n📝 === getOrCreateConversation called ===');
-    console.log('Request body:', req.body);
-    console.log('Request user:', req.user ? { id: req.user._id, fullname: req.user.fullname } : 'No user');
-    console.log('Request admin:', req.admin ? { id: req.admin._id, fullname: req.admin.fullname } : 'No admin');
-
     let { userId, adminId } = req.body;
 
-    // If no userId provided, get it from authenticated user
     if (!userId && req.user) {
-      console.log('✅ Extracting userId from authenticated user token');
       userId = req.user._id;
-      console.log('UserId:', userId);
     }
 
     if (!userId) {
-      console.log('❌ No userId found - neither in body nor in token');
-      return res.status(400).json({ message: 'User ID is required' });
+      return sendBadRequest(res, 'User ID is required');
     }
 
-    console.log('🔍 Searching for existing conversation with userId:', userId, 'adminId:', adminId);
-
-    // Find existing conversation
     let conversation = await Conversation.findOne({
       userId,
-      ...(adminId && { adminId }),
+      ...(adminId && { adminId })
     });
 
     if (conversation) {
-      console.log('✅ Found existing conversation:', conversation._id);
-      return res.status(200).json(conversation);
+      const conversationObj = conversation.toObject();
+      return res.status(200).json(conversationObj);
     }
 
-    // If no conversation exists, create a new one
-    console.log('📝 No existing conversation found, creating new one...');
-
-    console.log('🔍 Looking up user by ID:', userId);
     const user = await User.findById(userId);
     if (!user) {
-      console.log('❌ User not found in database');
-      return res.status(404).json({ message: 'User not found' });
+      return sendNotFound(res, 'User not found');
     }
-    console.log('✅ User found:', user.fullname, user.email);
 
-    let admin = null;
     let adminName = null;
-
     if (adminId) {
-      console.log('🔍 Looking up admin by ID:', adminId);
-      admin = await Admin.findById(adminId);
+      const admin = await Admin.findById(adminId);
       if (!admin) {
-        console.log('❌ Admin not found in database');
-        return res.status(404).json({ message: 'Admin not found' });
+        return sendNotFound(res, 'Admin not found');
       }
       adminName = admin.fullname;
-      console.log('✅ Admin found:', adminName);
-    } else {
-      console.log('ℹ️ No adminId provided, conversation will be unassigned');
     }
 
-    console.log('💾 Creating new conversation document...');
     conversation = await Conversation.create({
       userId,
       userName: user.fullname,
       adminId: adminId || null,
-      adminName: adminName,
+      adminName,
       lastMessage: 'Conversation started',
-      lastMessageTime: new Date(),
+      lastMessageTime: new Date()
     });
 
-    console.log('✅ Conversation created successfully:', conversation._id);
-
-    // Create automatic welcome message
-    console.log('📝 Creating automatic welcome message...');
-
-    // Find or create a system admin for automated messages
     let systemAdmin = await Admin.findOne({ username: 'resqyou_system' });
 
     if (!systemAdmin) {
-      console.log('Creating ResqYOU System admin account for automated messages...');
-      const bcrypt = require('bcryptjs');
-      const hashedPassword = await bcrypt.hash('system_admin_2024', 10);
+      const hashedPassword = await hashPassword('system_admin_2024');
 
       systemAdmin = await Admin.create({
         username: 'resqyou_system',
         password: hashedPassword,
         fullname: 'ResqYOU Respondents',
         email: 'emergency@resqyou.com',
-        role: 'admin',
-        isActive: true,
+        role: ADMIN_ROLES.ADMIN,
+        isActive: true
       });
-      console.log('✅ System admin created');
     }
 
-    const welcomeMessageText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;
+    const welcomeText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;
 
-    const welcomeMessage = await Message.create({
+    await Message.create({
       conversationId: conversation._id,
       senderType: 'admin',
       senderId: systemAdmin._id,
       senderModel: 'Admin',
-      text: welcomeMessageText,
-      isRead: false,
+      text: welcomeText,
+      isRead: false
     });
 
-    // Update conversation with welcome message
-    conversation.lastMessage = welcomeMessageText.substring(0, 100);
+    conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
     conversation.lastMessageTime = new Date();
-    conversation.unreadCountUser = 1; // Mark as unread for user
+    conversation.unreadCountUser = 1;
     await conversation.save();
 
-    console.log('✅ Welcome message created:', welcomeMessage._id);
-    console.log('=== getOrCreateConversation completed ===\n');
-
-    res.status(200).json(conversation);
+    const conversationObj = conversation.toObject();
+    return res.status(200).json(conversationObj);
   } catch (error) {
-    console.error('❌ Error in getOrCreateConversation:', error);
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error in getOrCreateConversation:', error);
+    return sendServerError(res, 'Failed to get or create conversation');
   }
 };
 
 /**
- * Get all conversations for a user (mobile app)
- *
- * @route GET /api/messages/conversations/user
- * @access Protected (User)
+ * Get User Conversations
  */
 const getUserConversations = async (req, res) => {
   try {
     const userId = req.user._id;
 
-    const conversations = await Conversation.find({ userId, status: 'active' })
+    const conversations = await Conversation.find({
+      userId,
+      status: CONVERSATION.STATUS.ACTIVE
+    })
       .sort({ lastMessageTime: -1 })
       .select('-__v');
 
-    res.status(200).json(conversations);
+    return sendOk(res, 'Conversations retrieved successfully', conversations);
   } catch (error) {
     console.error('Error in getUserConversations:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to retrieve conversations');
   }
 };
 
 /**
- * Get all conversations for an admin (web dashboard)
- *
- * @route GET /api/messages/conversations/admin
- * @access Protected (Admin)
+ * Get Admin Conversations
  */
 const getAdminConversations = async (req, res) => {
   try {
-    // Get all active conversations (admins can see all)
-    const conversations = await Conversation.find({ status: 'active' })
+    const conversations = await Conversation.find({
+      status: CONVERSATION.STATUS.ACTIVE
+    })
       .sort({ lastMessageTime: -1 })
       .select('-__v');
 
-    res.status(200).json(conversations);
+    return sendOk(res, 'Conversations retrieved successfully', conversations);
   } catch (error) {
     console.error('Error in getAdminConversations:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to retrieve conversations');
   }
 };
 
 /**
- * Assign an admin to a conversation
- *
- * @route PUT /api/messages/conversation/:id/assign
- * @access Protected (Admin)
- * @param {String} id - Conversation ID
+ * Assign Admin to Conversation
  */
 const assignAdminToConversation = async (req, res) => {
   try {
@@ -202,75 +169,45 @@ const assignAdminToConversation = async (req, res) => {
     const adminId = req.admin._id;
     const adminName = req.admin.fullname;
 
-    console.log('\n👔 === assignAdminToConversation called ===');
-    console.log('Conversation ID:', id);
-    console.log('Admin:', adminName, adminId);
-
     const conversation = await Conversation.findById(id);
-
     if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
+      return sendNotFound(res, 'Conversation not found');
     }
 
     const wasUnassigned = !conversation.adminId;
 
-    // Update conversation with admin details
     conversation.adminId = adminId;
     conversation.adminName = adminName;
     await conversation.save();
 
-    console.log('✅ Admin assigned to conversation');
-
-    // If this is the first admin assignment, send a welcome message
     if (wasUnassigned) {
-      console.log('📝 Sending welcome message (first admin assignment)...');
-
       const user = await User.findById(conversation.userId);
-      const welcomeMessageText = `Hi ${user.fullname}! 👋\n\nI'm ${adminName} from ResqYOU Emergency Response Team, and I'll be handling your case today.\n\nIf you need immediate assistance or have an emergency situation, please let me know right away. I'm here to help you 24/7.`;
+      const welcomeText = `Hi ${user.fullname}! 👋\n\nI'm ${adminName} from ResqYOU Emergency Response Team, and I'll be handling your case today.\n\nIf you need immediate assistance or have an emergency situation, please let me know right away. I'm here to help you 24/7.`;
 
-      const welcomeMessage = await Message.create({
+      await Message.create({
         conversationId: conversation._id,
         senderType: 'admin',
         senderId: adminId,
         senderModel: 'Admin',
-        text: welcomeMessageText,
-        isRead: false,
+        text: welcomeText,
+        isRead: false
       });
 
-      // Update conversation with welcome message
-      conversation.lastMessage = welcomeMessageText.substring(0, 100);
+      conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
       conversation.lastMessageTime = new Date();
       conversation.unreadCountUser += 1;
       await conversation.save();
-
-      console.log('✅ Welcome message created:', welcomeMessage._id);
     }
 
-    console.log('=== assignAdminToConversation completed ===\n');
-
-    res.status(200).json(conversation);
+    return sendOk(res, 'Admin assigned to conversation successfully', conversation);
   } catch (error) {
     console.error('Error in assignAdminToConversation:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to assign admin to conversation');
   }
 };
 
-// ============================================
-// MESSAGE OPERATIONS
-// ============================================
-
 /**
- * Send a message (from user or admin)
- *
- * @route POST /api/messages/send
- * @access Protected (User or Admin)
- * @body {String} conversationId - ID of the conversation
- * @body {String} text - Message content (optional for multimedia messages)
- * @body {String} senderType - 'user' or 'admin'
- * @body {String} messageType - 'text', 'image', 'video', 'audio' (default: 'text')
- * @body {String} mediaData - Base64 encoded media data (for multimedia messages)
- * @body {Number} mediaDuration - Duration in seconds (for audio/video)
- * @body {Number} mediaSize - File size in bytes
+ * Send Message
  */
 const sendMessage = async (req, res) => {
   try {
@@ -284,109 +221,82 @@ const sendMessage = async (req, res) => {
       mediaSize
     } = req.body;
 
-    // Validation
     if (!conversationId || !senderType) {
-      return res.status(400).json({ message: 'Conversation ID and sender type are required' });
+      return sendBadRequest(res, 'Conversation ID and sender type are required');
     }
 
-    if (!['user', 'admin'].includes(senderType)) {
-      return res.status(400).json({ message: 'Invalid sender type' });
+    if (!MESSAGE.SENDER_TYPES.includes(senderType)) {
+      return sendBadRequest(res, 'Invalid sender type');
     }
 
-    if (!['text', 'image', 'video', 'audio'].includes(messageType)) {
-      return res.status(400).json({ message: 'Invalid message type' });
+    if (!MESSAGE.TYPES.includes(messageType)) {
+      return sendBadRequest(res, 'Invalid message type');
     }
 
-    // For text messages, text is required
     if (messageType === 'text' && !text) {
-      return res.status(400).json({ message: 'Text is required for text messages' });
+      return sendBadRequest(res, 'Text is required for text messages');
     }
 
-    // For multimedia messages, mediaData is required
     if (messageType !== 'text' && !mediaData) {
-      return res.status(400).json({ message: 'Media data is required for multimedia messages' });
+      return sendBadRequest(res, 'Media data is required for multimedia messages');
     }
 
-    // Verify conversation exists
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
+      return sendNotFound(res, 'Conversation not found');
     }
 
-    // Determine sender ID and model based on sender type
     let senderId, senderModel;
     if (senderType === 'user') {
       senderId = req.user?._id;
       senderModel = 'User';
       if (!senderId) {
-        return res.status(401).json({ message: 'User not authenticated' });
+        return sendUnauthorized(res, 'User not authenticated');
       }
     } else {
       senderId = req.admin?._id;
       senderModel = 'Admin';
       if (!senderId) {
-        return res.status(401).json({ message: 'Admin not authenticated' });
+        return sendUnauthorized(res, 'Admin not authenticated');
       }
     }
 
-    // Handle media upload to Cloudinary
     let mediaUrl = null;
     let thumbnailUrl = null;
 
     if (messageType !== 'text' && mediaData) {
-      const cloudinary = require('../config/cloudinary');
-
       try {
-        console.log(`📤 Uploading ${messageType} to Cloudinary...`);
+        const resourceType = messageType === 'image' ? 'image' : 'video';
 
-        // Determine resource type for Cloudinary
-        let resourceType = 'auto';
-        if (messageType === 'video') resourceType = 'video';
-        else if (messageType === 'audio') resourceType = 'video'; // Cloudinary treats audio as video
-        else if (messageType === 'image') resourceType = 'image';
-
-        // Upload to Cloudinary
         const uploadResult = await cloudinary.uploader.upload(mediaData, {
           resource_type: resourceType,
-          folder: 'resqyou_messages',
-          // Generate thumbnail for videos
+          folder: CLOUDINARY.FOLDER,
           ...(messageType === 'video' && {
-            eager: [
-              { width: 300, height: 300, crop: 'thumb', gravity: 'center', format: 'jpg' }
-            ]
+            eager: [CLOUDINARY.VIDEO_THUMBNAIL]
           })
         });
 
         mediaUrl = uploadResult.secure_url;
 
-        // Get thumbnail URL for videos
-        if (messageType === 'video' && uploadResult.eager && uploadResult.eager[0]) {
+        if (messageType === 'video' && uploadResult.eager?.[0]) {
           thumbnailUrl = uploadResult.eager[0].secure_url;
         }
-
-        console.log('✅ Media uploaded successfully:', mediaUrl);
       } catch (uploadError) {
-        console.error('❌ Error uploading to Cloudinary:', uploadError);
-        return res.status(500).json({ message: 'Failed to upload media', error: uploadError.message });
+        console.error('Error uploading to Cloudinary:', uploadError);
+        return sendServerError(res, 'Failed to upload media');
       }
     }
 
-    // Prepare message data
     const messageData = {
       conversationId,
       senderType,
       senderId,
       senderModel,
       messageType,
-      isRead: false,
+      isRead: false
     };
 
-    // Add text if provided
-    if (text) {
-      messageData.text = text.trim();
-    }
-
-    // Add media data if this is a multimedia message
+    if (text) messageData.text = text.trim();
     if (messageType !== 'text') {
       messageData.mediaUrl = mediaUrl;
       if (thumbnailUrl) messageData.thumbnailUrl = thumbnailUrl;
@@ -394,25 +304,12 @@ const sendMessage = async (req, res) => {
       if (mediaSize) messageData.mediaSize = mediaSize;
     }
 
-    // Create the message
     const message = await Message.create(messageData);
 
-    // Determine last message text for conversation preview
-    let lastMessageText = '';
-    if (messageType === 'text') {
-      lastMessageText = text.substring(0, 100);
-    } else if (messageType === 'image') {
-      lastMessageText = '📷 Image';
-    } else if (messageType === 'video') {
-      lastMessageText = '🎥 Video';
-    } else if (messageType === 'audio') {
-      lastMessageText = '🎤 Voice message';
-    }
-
-    // Update conversation's last message and unread count
+    const lastMessageText = getMessagePreview(messageType, text);
     const updateData = {
       lastMessage: lastMessageText,
-      lastMessageTime: new Date(),
+      lastMessageTime: new Date()
     };
 
     if (senderType === 'user') {
@@ -423,112 +320,127 @@ const sendMessage = async (req, res) => {
 
     await Conversation.findByIdAndUpdate(conversationId, updateData);
 
-    // Populate sender info
-    const populatedMessage = await Message.findById(message._id).populate(
-      'senderId',
-      'fullname email'
-    );
+    const populatedMessage = await Message.findById(message._id)
+      .populate('senderId', 'fullname email')
+      .lean(); // Convert to plain JavaScript object
 
-    res.status(201).json(populatedMessage);
+    return sendCreated(res, 'Message sent successfully', populatedMessage);
   } catch (error) {
     console.error('Error in sendMessage:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to send message');
   }
 };
 
 /**
- * Get messages for a conversation
- *
- * @route GET /api/messages/conversation/:id
- * @access Protected (User or Admin)
- * @param {String} id - Conversation ID
- * @query {Number} limit - Number of messages to fetch (default: 50)
- * @query {Number} skip - Number of messages to skip (for pagination)
+ * Get Conversation Messages
  */
 const getConversationMessages = async (req, res) => {
   try {
     const { id } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || MESSAGE.DEFAULT_LIMIT;
     const skip = parseInt(req.query.skip) || 0;
 
-    // Verify conversation exists
-    const conversation = await Conversation.findById(id);
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
+    console.log('Fetching messages for conversation:', id);
+    console.log('Query params - limit:', limit, 'skip:', skip);
+
+    // Validate ObjectId format
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      console.error('Invalid conversation ID format:', id);
+      return sendBadRequest(res, 'Invalid conversation ID format');
     }
 
-    // Get messages
+    const conversation = await Conversation.findById(id);
+    if (!conversation) {
+      console.log('Conversation not found for id:', id);
+      return sendNotFound(res, 'Conversation not found');
+    }
+
+    console.log('Conversation found, fetching messages...');
+
+    // Fetch messages without populate first to avoid refPath issues
     const messages = await Message.find({ conversationId: id })
-      .sort({ createdAt: 1 }) // Oldest first
+      .sort({ createdAt: 1 })
       .skip(skip)
       .limit(limit)
-      .populate('senderId', 'fullname email')
-      .select('-__v');
+      .select('-__v')
+      .lean();
 
-    res.status(200).json(messages);
+    console.log(`Found ${messages.length} messages for conversation ${id}`);
+
+    // Manually populate sender info based on senderModel
+    const populatedMessages = await Promise.all(
+      messages.map(async (message) => {
+        try {
+          if (message.senderId && message.senderModel) {
+            const Model = message.senderModel === 'User' ? User : Admin;
+            const sender = await Model.findById(message.senderId)
+              .select('fullname email')
+              .lean();
+
+            if (sender) {
+              message.senderId = sender;
+            }
+          }
+        } catch (populateError) {
+          console.error('Error populating sender for message:', message._id, populateError.message);
+          // Keep the message but with unpopulated senderId
+        }
+        return message;
+      })
+    );
+
+    return sendOk(res, 'Messages retrieved successfully', populatedMessages);
   } catch (error) {
-    console.error('Error in getConversationMessages:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error in getConversationMessages:');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    return sendServerError(res, 'Failed to retrieve messages');
   }
 };
 
 /**
- * Mark messages as read
- *
- * @route PUT /api/messages/conversation/:id/read
- * @access Protected (User or Admin)
- * @param {String} id - Conversation ID
- * @body {String} readerType - 'user' or 'admin'
+ * Mark Messages as Read
  */
 const markMessagesAsRead = async (req, res) => {
   try {
     const { id } = req.params;
     const { readerType } = req.body;
 
-    if (!['user', 'admin'].includes(readerType)) {
-      return res.status(400).json({ message: 'Invalid reader type' });
+    if (!MESSAGE.SENDER_TYPES.includes(readerType)) {
+      return sendBadRequest(res, 'Invalid reader type');
     }
 
-    // Verify conversation exists
     const conversation = await Conversation.findById(id);
     if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
+      return sendNotFound(res, 'Conversation not found');
     }
 
-    // Mark messages as read (opposite sender type)
     const oppositeSenderType = readerType === 'user' ? 'admin' : 'user';
     await Message.updateMany(
       {
         conversationId: id,
         senderType: oppositeSenderType,
-        isRead: false,
+        isRead: false
       },
       { isRead: true }
     );
 
-    // Reset unread count in conversation
-    const updateData = {};
-    if (readerType === 'user') {
-      updateData.unreadCountUser = 0;
-    } else {
-      updateData.unreadCountAdmin = 0;
-    }
+    const updateData = readerType === 'user'
+      ? { unreadCountUser: 0 }
+      : { unreadCountAdmin: 0 };
 
     await Conversation.findByIdAndUpdate(id, updateData);
 
-    res.status(200).json({ message: 'Messages marked as read' });
+    return sendOk(res, 'Messages marked as read');
   } catch (error) {
     console.error('Error in markMessagesAsRead:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to mark messages as read');
   }
 };
 
 /**
- * Archive a conversation
- *
- * @route PUT /api/messages/conversation/:id/archive
- * @access Protected (Admin)
- * @param {String} id - Conversation ID
+ * Archive Conversation
  */
 const archiveConversation = async (req, res) => {
   try {
@@ -536,18 +448,18 @@ const archiveConversation = async (req, res) => {
 
     const conversation = await Conversation.findByIdAndUpdate(
       id,
-      { status: 'archived' },
+      { status: CONVERSATION.STATUS.ARCHIVED },
       { new: true }
     );
 
     if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
+      return sendNotFound(res, 'Conversation not found');
     }
 
-    res.status(200).json({ message: 'Conversation archived', conversation });
+    return sendOk(res, 'Conversation archived successfully', { conversation });
   } catch (error) {
     console.error('Error in archiveConversation:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return sendServerError(res, 'Failed to archive conversation');
   }
 };
 
@@ -559,5 +471,5 @@ module.exports = {
   sendMessage,
   getConversationMessages,
   markMessagesAsRead,
-  archiveConversation,
+  archiveConversation
 };
