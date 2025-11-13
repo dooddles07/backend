@@ -1,2 +1,26 @@
 # Node.js dependencies
 **/node_modules/
+
+# Environment variables (contains sensitive credentials)
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+logs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
