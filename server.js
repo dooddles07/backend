@@ -83,6 +83,7 @@ const authLimiter = rateLimit({
   windowMs: RATE_LIMITING.WINDOW_MS,
   max: RATE_LIMITING.AUTH_MAX_REQUESTS,
   message: 'Too many authentication attempts, please try again later.',
+  skip: (req) => req.path === '/verify' // Skip rate limiting for token verification
 });
 
 app.use('/api/', limiter);
