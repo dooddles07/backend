@@ -19,6 +19,10 @@ const app = express();
 const server = createServer(app);
 const PORT = process.env.PORT || 10000;
 
+// Trust proxy - Required for deployment behind reverse proxies (Render, Heroku, etc.)
+// This allows express-rate-limit to correctly identify client IPs
+app.set('trust proxy', 1);
+
 // Socket.IO Configuration
 const io = new Server(server, {
   cors: {
@@ -226,13 +230,17 @@ server.listen(PORT, () => {
   console.log(`WebSocket: http://localhost:${PORT}\n`);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('Shutting down gracefully...');
-  server.close(() => {
-    mongoose.connection.close(false, () => {
+  server.close(async () => {
+    try {
+      await mongoose.connection.close();
       console.log('Server closed');
       process.exit(0);
-    });
+    } catch (error) {
+      console.error('Error during shutdown:', error);
+      process.exit(1);
+    }
   });
 });
 
