@@ -45,25 +45,54 @@ const emitSOSUpdate = (io, sosData) => {
 
 const sendSOS = async (req, res) => {
   try {
+    console.log('📥 SOS Request received');
+    console.log('📋 Request body:', req.body);
+
     const { username, latitude, longitude } = req.body;
 
+    console.log('👤 Username:', username);
+    console.log('📍 Latitude:', latitude, 'Type:', typeof latitude);
+    console.log('📍 Longitude:', longitude, 'Type:', typeof longitude);
+
     if (!username || !latitude || !longitude) {
+      console.error('❌ Missing required fields:', { username, latitude, longitude });
       return sendBadRequest(res, 'Username, latitude, and longitude are required');
     }
 
+    // Validate coordinates are numbers
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      console.error('❌ Invalid coordinate types');
+      return sendBadRequest(res, 'Latitude and longitude must be numbers');
+    }
+
+    // Validate coordinate ranges
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      console.error('❌ Coordinates out of valid range');
+      return sendBadRequest(res, 'Invalid coordinate values');
+    }
+
+    console.log('✅ Validation passed');
+
     const user = await User.findOne({ username });
     if (!user) {
-      console.warn(`SOS received for non-existent user: ${username}. Creating SOS anyway for safety.`);
+      console.warn(`⚠️ SOS received for non-existent user: ${username}. Creating SOS anyway for safety.`);
+    } else {
+      console.log('✅ User found:', user.fullname);
     }
 
     const fullname = user?.fullname || username;
     const userId = user?._id || null;
 
+    console.log('🗺️ Getting address for coordinates:', latitude, longitude);
     const address = await getAddressFromCoordinates(latitude, longitude);
+    console.log('📍 Address resolved:', address);
 
+    console.log('🔍 Checking for existing active SOS...');
     const activeSOS = await SOS.findOne({ username, status: SOS_CONSTANTS.STATUS.ACTIVE });
 
     if (activeSOS) {
+      console.log('🔄 Updating existing SOS:', activeSOS._id);
+
       activeSOS.latitude = latitude;
       activeSOS.longitude = longitude;
       activeSOS.location = { type: 'Point', coordinates: [longitude, latitude] };
@@ -83,9 +112,10 @@ const sendSOS = async (req, res) => {
       }
 
       await activeSOS.save();
+      console.log('✅ SOS updated successfully');
 
       const io = req.app.get('io');
-      emitSOSUpdate(io, {
+      const updateData = {
         id: activeSOS._id,
         username: activeSOS.username,
         fullname: fullname,
@@ -96,7 +126,10 @@ const sendSOS = async (req, res) => {
         timestamp: activeSOS.timestamp,
         lastUpdated: activeSOS.lastUpdated,
         updateCount: activeSOS.locationHistory.length
-      });
+      };
+
+      console.log('📡 Emitting sos-updated to admin-room:', updateData);
+      emitSOSUpdate(io, updateData);
 
       return sendOk(res, 'SOS location updated successfully', {
         sos: {
@@ -114,6 +147,8 @@ const sendSOS = async (req, res) => {
       });
     }
 
+    console.log('🆕 Creating new SOS entry');
+
     const newSOS = new SOS({
       username,
       fullname: fullname,
@@ -127,9 +162,10 @@ const sendSOS = async (req, res) => {
     });
 
     await newSOS.save();
+    console.log('✅ New SOS saved to database:', newSOS._id);
 
     const io = req.app.get('io');
-    emitSOSAlert(io, {
+    const alertData = {
       id: newSOS._id,
       username: newSOS.username,
       fullname: fullname,
@@ -138,7 +174,11 @@ const sendSOS = async (req, res) => {
       address: newSOS.address,
       status: newSOS.status,
       timestamp: newSOS.timestamp
-    });
+    };
+
+    console.log('📡 Emitting sos-alert to admin-room:', alertData);
+    emitSOSAlert(io, alertData);
+    console.log('✅ Socket.IO emission complete');
 
     return sendCreated(res, 'SOS sent successfully', {
       sos: {
@@ -163,20 +203,34 @@ const sendSOS = async (req, res) => {
  */
 const cancelSOS = async (req, res) => {
   try {
+    console.log('📥 Cancel SOS Request received');
+    console.log('📋 Request body:', req.body);
+
     const { username } = req.body;
 
     if (!username) {
+      console.error('❌ Missing username in cancel request');
       return sendBadRequest(res, 'Username is required');
     }
 
+    console.log('🔍 Looking for active SOS for username:', username);
     const activeSOS = await SOS.findOne({ username, status: SOS_CONSTANTS.STATUS.ACTIVE });
+
     if (!activeSOS) {
+      console.warn(`⚠️ No active SOS found for username: ${username}`);
       return sendNotFound(res, 'No active SOS found');
     }
+
+    console.log('✅ Found active SOS:', activeSOS._id);
+    console.log('   Current status:', activeSOS.status);
 
     activeSOS.status = SOS_CONSTANTS.STATUS.CANCELLED;
     activeSOS.resolvedAt = new Date();
     await activeSOS.save();
+
+    console.log('✅ SOS status updated to CANCELLED in database');
+    console.log('   SOS ID:', activeSOS._id);
+    console.log('   Resolved at:', activeSOS.resolvedAt);
 
     const io = req.app.get('io');
     if (io) {
@@ -187,14 +241,22 @@ const cancelSOS = async (req, res) => {
         resolvedAt: activeSOS.resolvedAt
       };
 
+      console.log('📡 Emitting sos-cancelled event with data:', cancelledData);
+
       // Emit to user's room (both by userId and username for compatibility)
       if (activeSOS.userId) {
         io.to(activeSOS.userId.toString()).emit('sos-cancelled', cancelledData);
+        console.log(`   ✅ Emitted to user room: ${activeSOS.userId.toString()}`);
       }
       io.to(`user-${activeSOS.username}`).emit('sos-cancelled', cancelledData);
+      console.log(`   ✅ Emitted to username room: user-${activeSOS.username}`);
 
       // Notify admin room
       io.to('admin-room').emit('sos-cancelled', cancelledData);
+      console.log('   ✅ Emitted to admin-room');
+      console.log('✅ Socket.IO sos-cancelled emission complete');
+    } else {
+      console.error('❌ Socket.IO instance not found - events not emitted!');
     }
 
     return sendOk(res, 'SOS cancelled successfully', {
@@ -205,7 +267,7 @@ const cancelSOS = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Cancel SOS Error:', error);
+    console.error('❌ Cancel SOS Error:', error);
     return sendServerError(res, 'Failed to cancel SOS');
   }
 };
@@ -298,14 +360,22 @@ const getAllActiveSOS = async (req, res) => {
  */
 const resolveSOS = async (req, res) => {
   try {
+    console.log('📥 Resolve SOS Request received');
     const { sosId } = req.params;
+    console.log('🔍 Looking for SOS ID:', sosId);
 
     const sos = await SOS.findById(sosId).populate('userId', 'fullname');
     if (!sos) {
+      console.warn(`⚠️ SOS not found: ${sosId}`);
       return sendNotFound(res, 'SOS not found');
     }
 
+    console.log('✅ Found SOS:', sosId);
+    console.log('   Username:', sos.username);
+    console.log('   Current status:', sos.status);
+
     if (sos.status !== SOS_CONSTANTS.STATUS.ACTIVE) {
+      console.warn(`⚠️ SOS is already ${sos.status}`);
       return sendBadRequest(res, `SOS is already ${sos.status}`, {
         currentStatus: sos.status
       });
@@ -314,6 +384,9 @@ const resolveSOS = async (req, res) => {
     sos.status = SOS_CONSTANTS.STATUS.RESOLVED;
     sos.resolvedAt = new Date();
     await sos.save();
+
+    console.log('✅ SOS status updated to RESOLVED in database');
+    console.log('   Resolved at:', sos.resolvedAt);
 
     const io = req.app.get('io');
     if (io) {
@@ -326,21 +399,30 @@ const resolveSOS = async (req, res) => {
         message: 'Your emergency has been resolved by responders'
       };
 
+      console.log('📡 Emitting sos-resolved event with data:', resolvedData);
+
       // Emit by userId if available
       if (sos.userId) {
         io.to(sos.userId.toString()).emit('sos-resolved', resolvedData);
+        console.log(`   ✅ Emitted to user room: ${sos.userId.toString()}`);
       }
 
       // Also emit by username as fallback (for users not in userId room)
       io.to(`user-${sos.username}`).emit('sos-resolved', resolvedData);
+      console.log(`   ✅ Emitted to username room: user-${sos.username}`);
 
       // Notify admin room
-      io.to('admin-room').emit('sos-resolved', {
+      const adminData = {
         id: sos._id,
         username: sos.username,
         status: sos.status,
         resolvedAt: sos.resolvedAt
-      });
+      };
+      io.to('admin-room').emit('sos-resolved', adminData);
+      console.log('   ✅ Emitted to admin-room:', adminData);
+      console.log('✅ Socket.IO sos-resolved emission complete');
+    } else {
+      console.error('❌ Socket.IO instance not found - events not emitted!');
     }
 
     return sendOk(res, 'SOS marked as resolved successfully', {
@@ -352,7 +434,7 @@ const resolveSOS = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Resolve SOS Error:', error);
+    console.error('❌ Resolve SOS Error:', error);
     return sendServerError(res, 'Failed to resolve SOS');
   }
 };

@@ -30,21 +30,36 @@ const io = new Server(server, {
 app.set('io', io);
 
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  console.log(`✅ Client connected: ${socket.id}`);
 
   socket.on('join', (userId) => {
     socket.join(userId);
-    console.log(`User ${userId} joined room`);
+    console.log(`👤 User ${userId} joined room`);
   });
 
-  socket.on('join-admin', (adminId) => {
+  socket.on('join-admin', (adminId, callback) => {
+    console.log(`📡 Received join-admin request from admin: ${adminId}`);
+    console.log(`   Socket ID: ${socket.id}`);
+    console.log(`   Callback type: ${typeof callback}`);
+
     socket.join('admin-room');
     socket.join(adminId);
-    console.log(`Admin ${adminId} joined admin room`);
+    console.log(`✅ Admin ${adminId} successfully joined admin-room`);
+    console.log(`   Admin is now in rooms:`, Array.from(socket.rooms));
+
+    // Send acknowledgment back to client
+    if (callback && typeof callback === 'function') {
+      const response = { success: true, message: 'Joined admin room successfully' };
+      console.log(`📤 Sending callback response:`, response);
+      callback(response);
+      console.log(`✅ Callback sent`);
+    } else {
+      console.warn(`⚠️ No callback provided or callback is not a function`);
+    }
   });
 
   socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+    console.log(`🔌 Client disconnected: ${socket.id}`);
   });
 });
 
@@ -75,7 +90,37 @@ app.use('/api/', limiter);
 // Middleware Configuration
 app.use(express.json({ limit: UPLOAD.JSON_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: UPLOAD.JSON_LIMIT }));
-app.use(cors());
+
+// CORS Configuration - Allow requests from web and mobile apps
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return callback(null, true);
+
+    // List of allowed origins
+    const allowedOrigins = [
+      'http://localhost:8082',     // Web app (Expo)
+      'http://localhost:19006',    // Web app (alternative port)
+      'http://192.168.100.6:8082', // Local network web access
+      process.env.FRONTEND_URL,    // Production frontend
+    ].filter(Boolean); // Remove undefined values
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      // Still allow for development - just log it
+      console.log(`⚠️ Request from origin: ${origin}`);
+      callback(null, true);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400 // 24 hours
+};
+
+app.use(cors(corsOptions));
 
 // Database Configuration
 const createSuperAdminIfNeeded = async () => {

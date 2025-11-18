@@ -150,6 +150,7 @@ const getAdminConversations = async (req, res) => {
     const conversations = await Conversation.find({
       status: CONVERSATION.STATUS.ACTIVE
     })
+      .populate('userId', 'fullname avatar username email') // Populate user details including avatar
       .sort({ lastMessageTime: -1 })
       .select('-__v');
 
