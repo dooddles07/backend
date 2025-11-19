@@ -1,43 +1,31 @@
 const nodemailer = require('nodemailer');
 const { EMAIL } = require('../config/constants');
 
-// Connection pool for reusing SMTP connections
-let transporter = null;
-
+// Create fresh transporter for each email (avoids connection pooling issues on Render)
 const createTransporter = () => {
   if (!EMAIL.USER || !EMAIL.PASSWORD) {
     throw new Error('Email configuration is missing. Please check EMAIL_USER and EMAIL_PASSWORD in .env file');
   }
 
-  // Return cached transporter to reuse connections
-  if (transporter) {
-    return transporter;
-  }
-
-  transporter = nodemailer.createTransport({
-    service: EMAIL.SERVICE,
+  // Use port 465 with SSL instead of 587 with TLS
+  // Port 465 is more reliable on restrictive networks like Render
+  return nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // Use TLS (STARTTLS) on port 587
+    port: 465,
+    secure: true, // Use SSL on port 465 (more direct, fewer negotiation issues)
     auth: {
       user: EMAIL.USER,
       pass: EMAIL.PASSWORD
     },
-    // Increased timeouts for Render's network conditions
-    connectionTimeout: 30000, // 30 seconds (was 10s - Render needs more time)
-    socketTimeout: 30000,     // 30 seconds (was 10s)
-    greetingTimeout: 30000,   // 30 seconds for initial greeting
-    pool: {
-      maxConnections: 1,      // Use connection pooling
-      maxMessages: 100,       // Max messages per connection
-      rateDelta: 1000,        // Rate delta for the pool
-      rateLimit: 5            // Max 5 messages per second
+    // Timeout settings optimized for Render
+    connectionTimeout: 15000, // 15 seconds for initial connection
+    socketTimeout: 15000,     // 15 seconds for socket
+    tls: {
+      rejectUnauthorized: false // Allow self-signed certs in development/Render
     },
     debug: process.env.NODE_ENV === 'development',
     logger: process.env.NODE_ENV === 'development'
   });
-
-  return transporter;
 };
 
 const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c01c0', gradientEnd = '#6a0190') => {
@@ -133,10 +121,7 @@ const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, u
       const waitTime = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
       console.log(`[EMAIL SERVICE] Retrying in ${waitTime}ms due to transient error...`);
 
-      // Reset transporter connection for next attempt
-      transporter = null;
-
-      // Wait before retrying
+      // Wait before retrying (fresh transporter will be created on next attempt)
       await new Promise(resolve => setTimeout(resolve, waitTime));
 
       return sendPasswordResetEmailWithRetry(userEmail, fullname, resetCode, userType, retryCount + 1, maxRetries);
@@ -155,18 +140,9 @@ const sendPasswordResetEmail = (userEmail, fullname, resetCode, userType = 'user
   return sendPasswordResetEmailWithRetry(userEmail, fullname, resetCode, userType);
 };
 
-// Function to reset transporter (useful for testing or manual resets)
-const resetTransporter = () => {
-  if (transporter) {
-    transporter.close();
-    transporter = null;
-  }
-};
-
 module.exports = {
   createTransporter,
   sendPasswordResetEmail,
   sendPasswordResetEmailWithRetry,
-  createPasswordResetEmailTemplate,
-  resetTransporter
+  createPasswordResetEmailTemplate
 };
