@@ -48,6 +48,9 @@ const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c
 // Send password reset email using SendGrid API
 const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, userType = 'user', retryCount = 0, maxRetries = 3) => {
   try {
+    // Log API key status for debugging
+    const hasApiKey = !!process.env.SENDGRID_API_KEY;
+    console.log(`[EMAIL SERVICE] API Key Status: ${hasApiKey ? 'PRESENT' : 'MISSING'}`);
     console.log(`[EMAIL SERVICE] Attempting to send password reset email to: ${userEmail}${retryCount > 0 ? ` (Retry ${retryCount}/${maxRetries})` : ''}`);
 
     // Initialize SendGrid (will throw if API key missing)
