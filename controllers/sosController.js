@@ -465,6 +465,63 @@ const getAllSOSHistory = async (req, res) => {
   }
 };
 
+/**
+ * Get SOS Statistics (Admin)
+ * Efficiently returns counts without fetching all documents
+ */
+const getSOSStats = async (req, res) => {
+  try {
+    console.log('📊 Fetching SOS statistics...');
+
+    // Use MongoDB aggregation for efficient counting
+    const [stats] = await SOS.aggregate([
+      {
+        $facet: {
+          total: [{ $count: 'count' }],
+          active: [
+            { $match: { status: SOS_CONSTANTS.STATUS.ACTIVE } },
+            { $count: 'count' }
+          ],
+          resolved: [
+            { $match: { status: SOS_CONSTANTS.STATUS.RESOLVED } },
+            { $count: 'count' }
+          ],
+          cancelled: [
+            { $match: { status: SOS_CONSTANTS.STATUS.CANCELLED } },
+            { $count: 'count' }
+          ],
+          critical: [
+            {
+              $match: {
+                status: SOS_CONSTANTS.STATUS.ACTIVE,
+                timestamp: {
+                  $gte: new Date(Date.now() - 30 * 60 * 1000) // Last 30 minutes
+                }
+              }
+            },
+            { $count: 'count' }
+          ]
+        }
+      }
+    ]);
+
+    const result = {
+      totalIncidents: stats.total[0]?.count || 0,
+      activeIncidents: stats.active[0]?.count || 0,
+      resolvedIncidents: stats.resolved[0]?.count || 0,
+      cancelledIncidents: stats.cancelled[0]?.count || 0,
+      criticalIncidents: stats.critical[0]?.count || 0
+    };
+
+    console.log('✅ SOS statistics retrieved:', result);
+
+    return sendOk(res, 'SOS statistics retrieved successfully', result);
+  } catch (error) {
+    console.error('Get SOS Stats Error:', error);
+    return sendServerError(res, 'Failed to retrieve SOS statistics');
+  }
+};
+
 module.exports = {
   sendSOS,
   cancelSOS,
@@ -472,5 +529,6 @@ module.exports = {
   getActiveSOS,
   getAllActiveSOS,
   resolveSOS,
-  getAllSOSHistory
+  getAllSOSHistory,
+  getSOSStats
 };

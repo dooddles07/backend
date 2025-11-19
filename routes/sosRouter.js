@@ -6,7 +6,8 @@ const {
   getActiveSOS,
   getAllActiveSOS,
   resolveSOS,
-  getAllSOSHistory
+  getAllSOSHistory,
+  getSOSStats
 } = require('../controllers/sosController');
 const { sosValidation } = require('../middleware/validation');
 
@@ -17,6 +18,7 @@ router.post('/send', sosValidation.send, sendSOS);
 router.post('/cancel', sosValidation.cancel, cancelSOS);
 
 // Query Routes
+router.get('/stats', getSOSStats); // Must be before /active/:username to avoid conflicts
 router.get('/history/:username', getSOSHistory);
 router.get('/active/:username', getActiveSOS);
 router.get('/all-active', getAllActiveSOS);
