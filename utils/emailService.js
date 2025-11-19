@@ -1,31 +1,14 @@
-const nodemailer = require('nodemailer');
-const { EMAIL } = require('../config/constants');
+const sgMail = require('@sendgrid/mail');
 
-// Create fresh transporter for each email (avoids connection pooling issues on Render)
-const createTransporter = () => {
-  if (!EMAIL.USER || !EMAIL.PASSWORD) {
-    throw new Error('Email configuration is missing. Please check EMAIL_USER and EMAIL_PASSWORD in .env file');
+// Initialize SendGrid with API key
+const initializeSendGrid = () => {
+  const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+
+  if (!SENDGRID_API_KEY) {
+    throw new Error('SendGrid API key is missing. Please check SENDGRID_API_KEY in .env file');
   }
 
-  // Use port 465 with SSL instead of 587 with TLS
-  // Port 465 is more reliable on restrictive networks like Render
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, // Use SSL on port 465 (more direct, fewer negotiation issues)
-    auth: {
-      user: EMAIL.USER,
-      pass: EMAIL.PASSWORD
-    },
-    // Timeout settings optimized for Render
-    connectionTimeout: 15000, // 15 seconds for initial connection
-    socketTimeout: 15000,     // 15 seconds for socket
-    tls: {
-      rejectUnauthorized: false // Allow self-signed certs in development/Render
-    },
-    debug: process.env.NODE_ENV === 'development',
-    logger: process.env.NODE_ENV === 'development'
-  });
+  sgMail.setApiKey(SENDGRID_API_KEY);
 };
 
 const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c01c0', gradientEnd = '#6a0190') => {
@@ -62,15 +45,13 @@ const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c
   `;
 };
 
-// Retry logic with exponential backoff
+// Send password reset email using SendGrid API
 const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, userType = 'user', retryCount = 0, maxRetries = 3) => {
   try {
     console.log(`[EMAIL SERVICE] Attempting to send password reset email to: ${userEmail}${retryCount > 0 ? ` (Retry ${retryCount}/${maxRetries})` : ''}`);
 
-    const mailTransporter = createTransporter();
-
-    // Skip verify() - it adds unnecessary connection overhead and causes timeouts
-    // Instead, trust the credentials and handle errors during actual send
+    // Initialize SendGrid (will throw if API key missing)
+    initializeSendGrid();
 
     const brandColor = userType === 'admin' ? '#DC2626' : '#8c01c0';
     const gradientEnd = userType === 'admin' ? '#991B1B' : '#6a0190';
@@ -83,45 +64,56 @@ const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, u
 
     const emailTemplate = createPasswordResetEmailTemplate(fullname, resetCode, brandColor, gradientEnd);
 
-    const mailOptions = {
-      from: `"${fromName}" <${EMAIL.USER}>`,
+    // SendGrid email object
+    const msg = {
       to: userEmail,
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL || 'noreply@resqyou.com',
+        name: fromName
+      },
       subject,
-      html: emailTemplate
+      html: emailTemplate,
+      replyTo: 'support@resqyou.com'
     };
 
-    const info = await mailTransporter.sendMail(mailOptions);
+    // Send via SendGrid API (HTTP request, not SMTP)
+    const result = await sgMail.send(msg);
 
-    console.log('[EMAIL SERVICE] Email sent successfully');
-    console.log(`[EMAIL SERVICE] Message ID: ${info.messageId}`);
+    console.log('[EMAIL SERVICE] Email sent successfully via SendGrid');
+    console.log(`[EMAIL SERVICE] Status Code: ${result[0]?.statusCode || 202}`);
 
     return {
       success: true,
-      messageId: info.messageId,
-      response: info.response
+      messageId: result[0]?.headers?.['x-message-id'] || 'unknown',
+      response: result[0]?.statusCode || 202
     };
   } catch (error) {
     console.error(`[EMAIL SERVICE] Failed to send password reset email:`, error.message);
 
-    // Specific error handling
-    if (error.code === 'EAUTH') {
-      console.error('[EMAIL SERVICE] Authentication failed - check EMAIL_USER and EMAIL_PASSWORD');
-      throw new Error('Email authentication failed. Please verify your email credentials.');
-    } else if (error.code === 'EENVELOPE') {
+    // Check for specific error types
+    if (error.message.includes('Invalid email')) {
       console.error('[EMAIL SERVICE] Invalid email address format');
       throw new Error('Invalid email address format.');
+    } else if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+      console.error('[EMAIL SERVICE] SendGrid API key is invalid or missing');
+      throw new Error('Email service configuration error. Please contact support.');
+    } else if (error.message.includes('429') || error.message.includes('Too Many Requests')) {
+      console.error('[EMAIL SERVICE] SendGrid rate limit exceeded');
+      throw new Error('Too many email attempts. Please try again later.');
     }
 
-    // Retry logic for transient failures (timeout, connection errors)
-    if ((error.code === 'ESOCKET' || error.code === 'ETIMEDOUT' ||
-         error.message.includes('timeout') || error.message.includes('Connection') ||
-         error.message.includes('ECONNREFUSED') || error.message.includes('EHOSTUNREACH'))
+    // Retry logic for transient failures (timeout, network errors)
+    if ((error.message.includes('timeout') ||
+         error.message.includes('Connection') ||
+         error.message.includes('ECONNREFUSED') ||
+         error.message.includes('EHOSTUNREACH') ||
+         error.code === 'ECONNABORTED')
         && retryCount < maxRetries) {
 
       const waitTime = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
       console.log(`[EMAIL SERVICE] Retrying in ${waitTime}ms due to transient error...`);
 
-      // Wait before retrying (fresh transporter will be created on next attempt)
+      // Wait before retrying
       await new Promise(resolve => setTimeout(resolve, waitTime));
 
       return sendPasswordResetEmailWithRetry(userEmail, fullname, resetCode, userType, retryCount + 1, maxRetries);
@@ -129,7 +121,7 @@ const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, u
 
     // If max retries exceeded
     if (retryCount >= maxRetries) {
-      throw new Error(`Email server connection failed after ${maxRetries} retries. Please try again later or contact support.`);
+      throw new Error(`Email service unavailable after ${maxRetries} retries. Please try again later or contact support.`);
     }
 
     throw new Error(`Failed to send email: ${error.message}`);
@@ -141,8 +133,8 @@ const sendPasswordResetEmail = (userEmail, fullname, resetCode, userType = 'user
 };
 
 module.exports = {
-  createTransporter,
   sendPasswordResetEmail,
   sendPasswordResetEmailWithRetry,
-  createPasswordResetEmailTemplate
+  createPasswordResetEmailTemplate,
+  initializeSendGrid
 };
