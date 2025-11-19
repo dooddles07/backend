@@ -1,12 +1,20 @@
 const nodemailer = require('nodemailer');
 const { EMAIL } = require('../config/constants');
 
+// Connection pool for reusing SMTP connections
+let transporter = null;
+
 const createTransporter = () => {
   if (!EMAIL.USER || !EMAIL.PASSWORD) {
     throw new Error('Email configuration is missing. Please check EMAIL_USER and EMAIL_PASSWORD in .env file');
   }
 
-  return nodemailer.createTransport({
+  // Return cached transporter to reuse connections
+  if (transporter) {
+    return transporter;
+  }
+
+  transporter = nodemailer.createTransport({
     service: EMAIL.SERVICE,
     host: 'smtp.gmail.com',
     port: 587,
@@ -15,11 +23,21 @@ const createTransporter = () => {
       user: EMAIL.USER,
       pass: EMAIL.PASSWORD
     },
-    connectionTimeout: 10000, // 10 seconds
-    socketTimeout: 10000,     // 10 seconds
+    // Increased timeouts for Render's network conditions
+    connectionTimeout: 30000, // 30 seconds (was 10s - Render needs more time)
+    socketTimeout: 30000,     // 30 seconds (was 10s)
+    greetingTimeout: 30000,   // 30 seconds for initial greeting
+    pool: {
+      maxConnections: 1,      // Use connection pooling
+      maxMessages: 100,       // Max messages per connection
+      rateDelta: 1000,        // Rate delta for the pool
+      rateLimit: 5            // Max 5 messages per second
+    },
     debug: process.env.NODE_ENV === 'development',
     logger: process.env.NODE_ENV === 'development'
   });
+
+  return transporter;
 };
 
 const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c01c0', gradientEnd = '#6a0190') => {
@@ -56,20 +74,15 @@ const createPasswordResetEmailTemplate = (fullname, resetCode, brandColor = '#8c
   `;
 };
 
-const sendPasswordResetEmail = async (userEmail, fullname, resetCode, userType = 'user') => {
+// Retry logic with exponential backoff
+const sendPasswordResetEmailWithRetry = async (userEmail, fullname, resetCode, userType = 'user', retryCount = 0, maxRetries = 3) => {
   try {
-    console.log(`[EMAIL SERVICE] Attempting to send password reset email to: ${userEmail}`);
+    console.log(`[EMAIL SERVICE] Attempting to send password reset email to: ${userEmail}${retryCount > 0 ? ` (Retry ${retryCount}/${maxRetries})` : ''}`);
 
-    const transporter = createTransporter();
+    const mailTransporter = createTransporter();
 
-    // Verify transporter connection
-    try {
-      await transporter.verify();
-      console.log('[EMAIL SERVICE] SMTP connection verified successfully');
-    } catch (verifyError) {
-      console.error('[EMAIL SERVICE] SMTP connection verification failed:', verifyError.message);
-      throw new Error(`Email server connection failed: ${verifyError.message}. Please check your email configuration.`);
-    }
+    // Skip verify() - it adds unnecessary connection overhead and causes timeouts
+    // Instead, trust the credentials and handle errors during actual send
 
     const brandColor = userType === 'admin' ? '#DC2626' : '#8c01c0';
     const gradientEnd = userType === 'admin' ? '#991B1B' : '#6a0190';
@@ -89,13 +102,10 @@ const sendPasswordResetEmail = async (userEmail, fullname, resetCode, userType =
       html: emailTemplate
     };
 
-    console.log(`[EMAIL SERVICE] Sending email with subject: "${subject}"`);
-
-    const info = await transporter.sendMail(mailOptions);
+    const info = await mailTransporter.sendMail(mailOptions);
 
     console.log('[EMAIL SERVICE] Email sent successfully');
     console.log(`[EMAIL SERVICE] Message ID: ${info.messageId}`);
-    console.log(`[EMAIL SERVICE] Response: ${info.response}`);
 
     return {
       success: true,
@@ -103,32 +113,60 @@ const sendPasswordResetEmail = async (userEmail, fullname, resetCode, userType =
       response: info.response
     };
   } catch (error) {
-    console.error('[EMAIL SERVICE] Failed to send password reset email:', error);
-    console.error('[EMAIL SERVICE] Error details:', {
-      message: error.message,
-      code: error.code,
-      command: error.command,
-      response: error.response,
-      responseCode: error.responseCode
-    });
+    console.error(`[EMAIL SERVICE] Failed to send password reset email:`, error.message);
 
-    // Provide more specific error messages based on the error type
+    // Specific error handling
     if (error.code === 'EAUTH') {
-      throw new Error('Email authentication failed. Please verify EMAIL_USER and EMAIL_PASSWORD in your .env file are correct.');
-    } else if (error.code === 'ESOCKET' || error.code === 'ETIMEDOUT') {
-      throw new Error('Unable to connect to email server. Please check your network connection.');
+      console.error('[EMAIL SERVICE] Authentication failed - check EMAIL_USER and EMAIL_PASSWORD');
+      throw new Error('Email authentication failed. Please verify your email credentials.');
     } else if (error.code === 'EENVELOPE') {
+      console.error('[EMAIL SERVICE] Invalid email address format');
       throw new Error('Invalid email address format.');
-    } else if (error.message.includes('Email server connection failed')) {
-      throw error; // Re-throw our custom connection error
-    } else {
-      throw new Error(`Failed to send email: ${error.message}`);
     }
+
+    // Retry logic for transient failures (timeout, connection errors)
+    if ((error.code === 'ESOCKET' || error.code === 'ETIMEDOUT' ||
+         error.message.includes('timeout') || error.message.includes('Connection') ||
+         error.message.includes('ECONNREFUSED') || error.message.includes('EHOSTUNREACH'))
+        && retryCount < maxRetries) {
+
+      const waitTime = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
+      console.log(`[EMAIL SERVICE] Retrying in ${waitTime}ms due to transient error...`);
+
+      // Reset transporter connection for next attempt
+      transporter = null;
+
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+
+      return sendPasswordResetEmailWithRetry(userEmail, fullname, resetCode, userType, retryCount + 1, maxRetries);
+    }
+
+    // If max retries exceeded
+    if (retryCount >= maxRetries) {
+      throw new Error(`Email server connection failed after ${maxRetries} retries. Please try again later or contact support.`);
+    }
+
+    throw new Error(`Failed to send email: ${error.message}`);
+  }
+};
+
+const sendPasswordResetEmail = (userEmail, fullname, resetCode, userType = 'user') => {
+  return sendPasswordResetEmailWithRetry(userEmail, fullname, resetCode, userType);
+};
+
+// Function to reset transporter (useful for testing or manual resets)
+const resetTransporter = () => {
+  if (transporter) {
+    transporter.close();
+    transporter = null;
   }
 };
 
 module.exports = {
   createTransporter,
   sendPasswordResetEmail,
-  createPasswordResetEmailTemplate
+  sendPasswordResetEmailWithRetry,
+  createPasswordResetEmailTemplate,
+  resetTransporter
 };
