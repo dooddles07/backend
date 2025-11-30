@@ -65,8 +65,8 @@ const sendForbidden = (res, message) => {
   return sendError(res, 403, message);
 };
 
-const sendNotFound = (res, message) => {
-  return sendError(res, 404, message);
+const sendNotFound = (res, message, additionalData = {}) => {
+  return sendError(res, 404, message, additionalData);
 };
 
 const sendServerError = (res, message = 'Internal server error') => {

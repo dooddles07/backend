@@ -117,6 +117,13 @@ conversationSchema.index({ userId: 1, status: 1 });
 conversationSchema.index({ adminId: 1, status: 1 });
 conversationSchema.index({ lastMessageTime: -1 });
 
+// Prevent duplicate active conversations for the same user
+conversationSchema.index({ userId: 1, status: 1 }, {
+  unique: true,
+  partialFilterExpression: { status: 'active' },
+  name: 'unique_active_user_conversation'
+});
+
 const Message = mongoose.model('Message', messageSchema);
 const Conversation = mongoose.model('Conversation', conversationSchema);
 

@@ -225,12 +225,12 @@ const cancelSOS = async (req, res) => {
     console.log('   Current status:', activeSOS.status);
 
     activeSOS.status = SOS_CONSTANTS.STATUS.CANCELLED;
-    activeSOS.resolvedAt = new Date();
+    activeSOS.cancelledAt = new Date();
     await activeSOS.save();
 
     console.log('✅ SOS status updated to CANCELLED in database');
     console.log('   SOS ID:', activeSOS._id);
-    console.log('   Resolved at:', activeSOS.resolvedAt);
+    console.log('   Cancelled at:', activeSOS.cancelledAt);
 
     const io = req.app.get('io');
     if (io) {
@@ -238,7 +238,7 @@ const cancelSOS = async (req, res) => {
         id: activeSOS._id,
         username: activeSOS.username,
         status: activeSOS.status,
-        resolvedAt: activeSOS.resolvedAt
+        cancelledAt: activeSOS.cancelledAt
       };
 
       console.log('📡 Emitting sos-cancelled event with data:', cancelledData);
@@ -263,7 +263,7 @@ const cancelSOS = async (req, res) => {
       sos: {
         id: activeSOS._id,
         status: activeSOS.status,
-        resolvedAt: activeSOS.resolvedAt
+        cancelledAt: activeSOS.cancelledAt
       }
     });
   } catch (error) {

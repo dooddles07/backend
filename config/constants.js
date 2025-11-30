@@ -10,7 +10,7 @@ const AUTHENTICATION = {
 const RATE_LIMITING = {
   WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 500,
-  AUTH_MAX_REQUESTS: 20
+  AUTH_MAX_REQUESTS: 100 // Increased from 20 to 100 for development
 };
 
 const SOS = {

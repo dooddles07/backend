@@ -49,8 +49,10 @@ const getOrCreateConversation = async (req, res) => {
       return sendBadRequest(res, 'User ID is required');
     }
 
+    // First attempt: Check if conversation exists
     let conversation = await Conversation.findOne({
       userId,
+      status: CONVERSATION.STATUS.ACTIVE,
       ...(adminId && { adminId })
     });
 
@@ -73,48 +75,68 @@ const getOrCreateConversation = async (req, res) => {
       adminName = admin.fullname;
     }
 
-    conversation = await Conversation.create({
-      userId,
-      userName: user.fullname,
-      adminId: adminId || null,
-      adminName,
-      lastMessage: 'Conversation started',
-      lastMessageTime: new Date()
-    });
-
-    let systemAdmin = await Admin.findOne({ username: 'resqyou_system' });
-
-    if (!systemAdmin) {
-      const hashedPassword = await hashPassword('system_admin_2024');
-
-      systemAdmin = await Admin.create({
-        username: 'resqyou_system',
-        password: hashedPassword,
-        fullname: 'ResqYOU Respondents',
-        email: 'emergency@resqyou.com',
-        role: ADMIN_ROLES.ADMIN,
-        isActive: true
+    try {
+      // Attempt to create new conversation
+      conversation = await Conversation.create({
+        userId,
+        userName: user.fullname,
+        adminId: adminId || null,
+        adminName,
+        lastMessage: 'Conversation started',
+        lastMessageTime: new Date()
       });
+
+      let systemAdmin = await Admin.findOne({ username: 'resqyou_system' });
+
+      if (!systemAdmin) {
+        const hashedPassword = await hashPassword('system_admin_2024');
+
+        systemAdmin = await Admin.create({
+          username: 'resqyou_system',
+          password: hashedPassword,
+          fullname: 'ResqYOU Respondents',
+          email: 'emergency@resqyou.com',
+          role: ADMIN_ROLES.ADMIN,
+          isActive: true
+        });
+      }
+
+      const welcomeText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;
+
+      await Message.create({
+        conversationId: conversation._id,
+        senderType: 'admin',
+        senderId: systemAdmin._id,
+        senderModel: 'Admin',
+        text: welcomeText,
+        isRead: false
+      });
+
+      conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
+      conversation.lastMessageTime = new Date();
+      conversation.unreadCountUser = 1;
+      await conversation.save();
+
+      const conversationObj = conversation.toObject();
+      return res.status(200).json(conversationObj);
+    } catch (createError) {
+      // Handle duplicate key error (race condition)
+      if (createError.code === 11000 || createError.name === 'MongoServerError') {
+        console.log('Duplicate conversation detected, fetching existing conversation...');
+        // Another request created the conversation, fetch it
+        conversation = await Conversation.findOne({
+          userId,
+          status: CONVERSATION.STATUS.ACTIVE
+        });
+
+        if (conversation) {
+          const conversationObj = conversation.toObject();
+          return res.status(200).json(conversationObj);
+        }
+      }
+      // Re-throw if it's not a duplicate key error
+      throw createError;
     }
-
-    const welcomeText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;
-
-    await Message.create({
-      conversationId: conversation._id,
-      senderType: 'admin',
-      senderId: systemAdmin._id,
-      senderModel: 'Admin',
-      text: welcomeText,
-      isRead: false
-    });
-
-    conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
-    conversation.lastMessageTime = new Date();
-    conversation.unreadCountUser = 1;
-    await conversation.save();
-
-    const conversationObj = conversation.toObject();
-    return res.status(200).json(conversationObj);
   } catch (error) {
     console.error('Error in getOrCreateConversation:', error);
     return sendServerError(res, 'Failed to get or create conversation');

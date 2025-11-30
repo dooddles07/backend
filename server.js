@@ -67,20 +67,77 @@ io.on('connection', (socket) => {
   });
 });
 
+// CORS Configuration - MUST be applied BEFORE rate limiting to ensure headers are always sent
+const corsOptions = {
+  origin: function (origin, callback) {
+    console.log(`📡 Incoming request from origin: ${origin || 'No Origin (mobile/Postman)'}`);
+
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) {
+      console.log('   ✅ Allowed: No origin (mobile/native app)');
+      return callback(null, true);
+    }
+
+    // List of allowed origins
+    const allowedOrigins = [
+      'http://localhost:8082',     // Web app (Expo)
+      'http://localhost:19006',    // Web app (alternative port)
+      'http://localhost:3000',     // Alternative dev port
+      'http://127.0.0.1:8082',     // Localhost alternative
+      'http://192.168.100.6:8082', // Local network web access
+      'http://192.168.100.6:19006', // Local network alternative
+      process.env.FRONTEND_URL,    // Production frontend
+    ].filter(Boolean); // Remove undefined values
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log(`   ✅ Allowed: ${origin}`);
+      callback(null, true);
+    } else {
+      // For development, allow all origins and just log a warning
+      console.log(`   ⚠️ Origin not in whitelist but allowing for development: ${origin}`);
+      callback(null, true);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  optionsSuccessStatus: 200,
+  maxAge: 86400 // 24 hours
+};
+
+app.use(cors(corsOptions));
+
+// Middleware Configuration
+app.use(express.json({ limit: UPLOAD.JSON_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: UPLOAD.JSON_LIMIT }));
+
 // Security Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false
 }));
 
+// Rate Limiting Configuration
 const limiter = rateLimit({
   windowMs: RATE_LIMITING.WINDOW_MS,
   max: RATE_LIMITING.MAX_REQUESTS,
   message: 'Too many requests, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => ['/sos/all-active', '/sos/all-history', '/messages/conversations']
-    .some(path => req.path.includes(path))
+  skip: (req) => {
+    // Skip rate limiting for frequently accessed endpoints
+    const skipPaths = [
+      '/sos/all-active',
+      '/sos/all-history',
+      '/messages/conversations',
+      '/messages/conversation' // Skip all conversation endpoints including read/fetch
+    ];
+    return skipPaths.some(path => req.path.includes(path));
+  },
+  // Ensure CORS headers are sent even when rate limited
+  skipFailedRequests: false,
+  skipSuccessfulRequests: false
 });
 
 const authLimiter = rateLimit({
@@ -91,41 +148,6 @@ const authLimiter = rateLimit({
 });
 
 app.use('/api/', limiter);
-
-// Middleware Configuration
-app.use(express.json({ limit: UPLOAD.JSON_LIMIT }));
-app.use(express.urlencoded({ extended: true, limit: UPLOAD.JSON_LIMIT }));
-
-// CORS Configuration - Allow requests from web and mobile apps
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or Postman)
-    if (!origin) return callback(null, true);
-
-    // List of allowed origins
-    const allowedOrigins = [
-      'http://localhost:8082',     // Web app (Expo)
-      'http://localhost:19006',    // Web app (alternative port)
-      'http://192.168.100.6:8082', // Local network web access
-      process.env.FRONTEND_URL,    // Production frontend
-    ].filter(Boolean); // Remove undefined values
-
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      // Still allow for development - just log it
-      console.log(`⚠️ Request from origin: ${origin}`);
-      callback(null, true);
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400 // 24 hours
-};
-
-app.use(cors(corsOptions));
 
 // Database Configuration
 const createSuperAdminIfNeeded = async () => {

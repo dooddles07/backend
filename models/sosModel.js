@@ -50,6 +50,9 @@ const sosSchema = new mongoose.Schema({
   resolvedAt: {
     type: Date
   },
+  cancelledAt: {
+    type: Date
+  },
   locationHistory: [{
     latitude: Number,
     longitude: Number,
