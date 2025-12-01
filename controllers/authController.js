@@ -30,10 +30,9 @@ const registerUser = async (req, res) => {
     });
 
     if (existingUser) {
-      const message = existingUser.email === email.toLowerCase()
-        ? 'Email already exists'
-        : 'Username already exists';
-      return sendBadRequest(res, message);
+      // 🔒 SECURITY: Use generic message to prevent user enumeration
+      // Don't reveal whether email or username already exists
+      return sendBadRequest(res, 'User already exists. Please use different credentials.');
     }
 
     const hashedPassword = await hashPassword(password);
@@ -348,6 +347,20 @@ const uploadAvatar = async (req, res) => {
 
     if (!avatar.startsWith('data:image')) {
       return sendBadRequest(res, 'Invalid image format');
+    }
+
+    // 🔒 SECURITY: Validate file size to prevent DoS attacks
+    // Base64 encoding increases size by ~33%, so 2MB image = ~2.7MB base64
+    const MAX_AVATAR_SIZE = 3 * 1024 * 1024; // 3MB base64 (allows ~2MB actual image)
+    if (avatar.length > MAX_AVATAR_SIZE) {
+      return sendBadRequest(res, 'Avatar file too large. Maximum size is 2MB');
+    }
+
+    // 🔒 SECURITY: Additional validation - check if it's a valid base64 image
+    const validImageTypes = ['data:image/jpeg', 'data:image/jpg', 'data:image/png', 'data:image/gif'];
+    const isValidType = validImageTypes.some(type => avatar.startsWith(type));
+    if (!isValidType) {
+      return sendBadRequest(res, 'Invalid image type. Allowed types: JPEG, PNG, GIF');
     }
 
     const updatedUser = await User.findByIdAndUpdate(

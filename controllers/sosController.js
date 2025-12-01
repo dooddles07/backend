@@ -71,6 +71,12 @@ const sendSOS = async (req, res) => {
       return sendBadRequest(res, 'Invalid coordinate values');
     }
 
+    // 🔒 SECURITY: Prevent IDOR - Users can only send SOS for themselves
+    if (req.user.username !== username) {
+      console.warn(`⚠️ IDOR attempt: User ${req.user.username} tried to send SOS as ${username}`);
+      return sendBadRequest(res, 'You can only send SOS for your own account');
+    }
+
     console.log('✅ Validation passed');
 
     const user = await User.findOne({ username });
@@ -213,6 +219,12 @@ const cancelSOS = async (req, res) => {
       return sendBadRequest(res, 'Username is required');
     }
 
+    // 🔒 SECURITY: Prevent IDOR - Users can only cancel their own SOS
+    if (req.user.username !== username) {
+      console.warn(`⚠️ IDOR attempt: User ${req.user.username} tried to cancel ${username}'s SOS`);
+      return sendBadRequest(res, 'You can only cancel your own SOS');
+    }
+
     console.log('🔍 Looking for active SOS for username:', username);
     const activeSOS = await SOS.findOne({ username, status: SOS_CONSTANTS.STATUS.ACTIVE });
 
@@ -283,6 +295,12 @@ const getSOSHistory = async (req, res) => {
       return sendBadRequest(res, 'Username is required');
     }
 
+    // 🔒 SECURITY: Prevent IDOR - Users can only access their own data
+    if (req.user.username !== username) {
+      console.warn(`⚠️ IDOR attempt: User ${req.user.username} tried to access ${username}'s history`);
+      return sendBadRequest(res, 'You can only access your own SOS history');
+    }
+
     const sosHistory = await SOS.find({ username })
       .sort({ timestamp: -1 })
       .limit(SOS_CONSTANTS.DEFAULT_HISTORY_LIMIT);
@@ -306,6 +324,12 @@ const getActiveSOS = async (req, res) => {
 
     if (!username) {
       return sendBadRequest(res, 'Username is required');
+    }
+
+    // 🔒 SECURITY: Prevent IDOR - Users can only access their own data
+    if (req.user.username !== username) {
+      console.warn(`⚠️ IDOR attempt: User ${req.user.username} tried to check ${username}'s active SOS`);
+      return sendBadRequest(res, 'You can only check your own active SOS');
     }
 
     const activeSOS = await SOS.findOne({ username, status: SOS_CONSTANTS.STATUS.ACTIVE });

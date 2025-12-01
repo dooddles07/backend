@@ -37,10 +37,9 @@ const registerAdmin = async (req, res) => {
     });
 
     if (existingAdmin) {
-      const message = existingAdmin.email === email.toLowerCase()
-        ? 'Email already exists'
-        : 'Username already exists';
-      return sendBadRequest(res, message);
+      // 🔒 SECURITY: Use generic message to prevent user enumeration
+      // Don't reveal whether email or username already exists
+      return sendBadRequest(res, 'Admin already exists. Please use different credentials.');
     }
 
     const hashedPassword = await hashPassword(password);
@@ -86,13 +85,16 @@ const loginAdmin = async (req, res) => {
       return sendUnauthorized(res, 'Invalid credentials');
     }
 
-    if (!admin.isActive) {
-      return sendForbidden(res, 'Account is deactivated. Contact super admin.');
-    }
-
+    // 🔒 SECURITY: Verify password first before checking account status
+    // This prevents user enumeration by timing attacks
     const isPasswordValid = await comparePassword(password, admin.password);
     if (!isPasswordValid) {
       return sendUnauthorized(res, 'Invalid credentials');
+    }
+
+    // Now check if account is active (after password verification)
+    if (!admin.isActive) {
+      return sendForbidden(res, 'Account is deactivated. Contact super admin.');
     }
 
     admin.lastLogin = new Date();

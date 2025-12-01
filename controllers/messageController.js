@@ -86,19 +86,29 @@ const getOrCreateConversation = async (req, res) => {
         lastMessageTime: new Date()
       });
 
-      let systemAdmin = await Admin.findOne({ username: 'resqyou_system' });
+      const systemUsername = process.env.SYSTEM_ADMIN_USERNAME || 'resqyou_system';
+      let systemAdmin = await Admin.findOne({ username: systemUsername });
 
       if (!systemAdmin) {
-        const hashedPassword = await hashPassword('system_admin_2024');
+        // 🔒 SECURITY: Password must come from environment variable
+        const systemPassword = process.env.SYSTEM_ADMIN_PASSWORD;
+        if (!systemPassword) {
+          console.error('❌ SYSTEM_ADMIN_PASSWORD environment variable is required!');
+          return sendServerError(res, 'System configuration error');
+        }
+
+        const hashedPassword = await hashPassword(systemPassword);
 
         systemAdmin = await Admin.create({
-          username: 'resqyou_system',
+          username: systemUsername,
           password: hashedPassword,
-          fullname: 'ResqYOU Respondents',
-          email: 'emergency@resqyou.com',
+          fullname: process.env.SYSTEM_ADMIN_FULLNAME || 'ResqYOU Respondents',
+          email: process.env.SYSTEM_ADMIN_EMAIL || 'emergency@resqyou.com',
           role: ADMIN_ROLES.ADMIN,
           isActive: true
         });
+
+        console.log(`✅ System admin created: ${systemUsername}`);
       }
 
       const welcomeText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;

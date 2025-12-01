@@ -10,21 +10,21 @@ const {
   getSOSStats
 } = require('../controllers/sosController');
 const { sosValidation } = require('../middleware/validation');
+const { protect } = require('../middleware/authMiddleware');
+const { protectAdmin } = require('../middleware/adminMiddlware');
 
 const router = express.Router();
 
-// Public Routes
-router.post('/send', sosValidation.send, sendSOS);
-router.post('/cancel', sosValidation.cancel, cancelSOS);
+// 🔒 User Routes (Protected - Requires Authentication)
+router.post('/send', protect, sosValidation.send, sendSOS);
+router.post('/cancel', protect, sosValidation.cancel, cancelSOS);
+router.get('/history/:username', protect, getSOSHistory);
+router.get('/active/:username', protect, getActiveSOS);
 
-// Query Routes
-router.get('/stats', getSOSStats); // Must be before /active/:username to avoid conflicts
-router.get('/history/:username', getSOSHistory);
-router.get('/active/:username', getActiveSOS);
-router.get('/all-active', getAllActiveSOS);
-router.get('/all-history', getAllSOSHistory);
-
-// Admin Actions
-router.patch('/resolve/:sosId', sosValidation.resolve, resolveSOS);
+// 🔒 Admin Routes (Protected - Requires Admin Authentication)
+router.get('/stats', protectAdmin, getSOSStats); // Must be before /active/:username to avoid conflicts
+router.get('/all-active', protectAdmin, getAllActiveSOS);
+router.get('/all-history', protectAdmin, getAllSOSHistory);
+router.patch('/resolve/:sosId', protectAdmin, sosValidation.resolve, resolveSOS);
 
 module.exports = router;

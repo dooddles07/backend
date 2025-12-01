@@ -7,6 +7,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const cron = require('node-cron');
 
 const { RATE_LIMITING, UPLOAD, ADMIN_ROLES } = require('./config/constants');
 const { hashPassword } = require('./utils/passwordService');
@@ -23,7 +24,9 @@ const PORT = process.env.PORT || 10000;
 // This allows express-rate-limit to correctly identify client IPs
 app.set('trust proxy', 1);
 
-// Socket.IO Configuration
+// Socket.IO Configuration with Authentication
+const { verifyToken } = require('./utils/tokenService');
+
 const io = new Server(server, {
   cors: {
     origin: process.env.FRONTEND_URL || "*",
@@ -31,20 +34,84 @@ const io = new Server(server, {
   }
 });
 
+// 🔒 Socket.IO Authentication Middleware
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+
+  if (!token) {
+    console.warn(`❌ Socket connection rejected: No token provided`);
+    return next(new Error('Authentication error: No token provided'));
+  }
+
+  try {
+    const decoded = verifyToken(token);
+    socket.userId = decoded.id;
+    socket.username = decoded.username; // 🔒 Store username for room verification
+    socket.userRole = decoded.role;
+    socket.tokenType = decoded.tokenType;
+    console.log(`✅ Socket authenticated: ${decoded.username} (${decoded.tokenType})`);
+    next();
+  } catch (error) {
+    console.error(`❌ Socket authentication failed:`, error.message);
+    next(new Error('Authentication error: Invalid token'));
+  }
+});
+
 app.set('io', io);
 
 io.on('connection', (socket) => {
-  console.log(`✅ Client connected: ${socket.id}`);
+  console.log(`✅ Client connected: ${socket.id} (User: ${socket.userId})`);
 
-  socket.on('join', (userId) => {
-    socket.join(userId);
-    console.log(`👤 User ${userId} joined room`);
+  socket.on('join', (roomId) => {
+    // 🔒 Handle username-based rooms (format: user-username)
+    if (typeof roomId === 'string' && roomId.startsWith('user-')) {
+      const requestedUsername = roomId.substring(5); // Remove 'user-' prefix
+
+      // Verify user can only join their own username room
+      if (socket.username !== requestedUsername && socket.tokenType !== 'admin') {
+        console.error(`❌ Unauthorized: ${socket.username} tried to join room ${roomId}`);
+        return;
+      }
+
+      socket.join(roomId);
+      console.log(`👤 User ${socket.username} joined username room: ${roomId}`);
+      return;
+    }
+
+    // 🔒 Handle userId-based rooms (MongoDB ObjectId)
+    // Convert both to strings for comparison (handles ObjectId vs string mismatch)
+    const socketUserIdStr = socket.userId?.toString();
+    const roomIdStr = roomId?.toString();
+
+    if (socketUserIdStr !== roomIdStr && socket.tokenType !== 'admin') {
+      console.error(`❌ Unauthorized: User ${socketUserIdStr} tried to join room ${roomIdStr}`);
+      return;
+    }
+
+    socket.join(roomIdStr);
+    console.log(`👤 User ${socketUserIdStr} joined their userId room: ${roomIdStr}`);
   });
 
   socket.on('join-admin', (adminId, callback) => {
     console.log(`📡 Received join-admin request from admin: ${adminId}`);
-    console.log(`   Socket ID: ${socket.id}`);
-    console.log(`   Callback type: ${typeof callback}`);
+
+    // 🔒 SECURITY: Verify user is actually an admin
+    if (socket.tokenType !== 'admin') {
+      console.error(`❌ Unauthorized: Non-admin tried to join admin room`);
+      if (callback && typeof callback === 'function') {
+        callback({ success: false, message: 'Unauthorized: Admin access required' });
+      }
+      return;
+    }
+
+    // 🔒 Verify admin can only join their own admin room
+    if (socket.userId !== adminId) {
+      console.error(`❌ Unauthorized: Admin ${socket.userId} tried to join admin room ${adminId}`);
+      if (callback && typeof callback === 'function') {
+        callback({ success: false, message: 'Unauthorized: Cannot join another admin\'s room' });
+      }
+      return;
+    }
 
     socket.join('admin-room');
     socket.join(adminId);
@@ -57,8 +124,6 @@ io.on('connection', (socket) => {
       console.log(`📤 Sending callback response:`, response);
       callback(response);
       console.log(`✅ Callback sent`);
-    } else {
-      console.warn(`⚠️ No callback provided or callback is not a function`);
     }
   });
 
@@ -78,24 +143,33 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // List of allowed origins
+    // List of allowed origins from environment variable
+    // 🔒 SECURITY: Configure allowed origins in .env file
+    // Format: Comma-separated list (e.g., "http://localhost:3000,http://192.168.1.1:19006")
+    const envOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+      : [];
+
     const allowedOrigins = [
-      'http://localhost:8082',     // Web app (Expo)
-      'http://localhost:19006',    // Web app (alternative port)
-      'http://localhost:3000',     // Alternative dev port
-      'http://127.0.0.1:8082',     // Localhost alternative
-      'http://192.168.100.6:8082', // Local network web access
-      'http://192.168.100.6:19006', // Local network alternative
-      process.env.FRONTEND_URL,    // Production frontend
+      ...envOrigins,
+      process.env.FRONTEND_URL,  // Backward compatibility
     ].filter(Boolean); // Remove undefined values
 
     if (allowedOrigins.indexOf(origin) !== -1) {
       console.log(`   ✅ Allowed: ${origin}`);
       callback(null, true);
     } else {
-      // For development, allow all origins and just log a warning
-      console.log(`   ⚠️ Origin not in whitelist but allowing for development: ${origin}`);
-      callback(null, true);
+      // 🔒 SECURITY FIX: Block unauthorized origins
+      const errorMsg = `❌ Blocked: Unauthorized origin: ${origin}`;
+      console.error(errorMsg);
+
+      // In development, you can set ALLOW_ALL_ORIGINS=true in .env to bypass this
+      if (process.env.ALLOW_ALL_ORIGINS === 'true') {
+        console.warn(`   ⚠️ ALLOW_ALL_ORIGINS is enabled - allowing ${origin}`);
+        return callback(null, true);
+      }
+
+      callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
@@ -156,28 +230,46 @@ const createSuperAdminIfNeeded = async () => {
 
     const existingSuperAdmin = await Admin.findOne({ role: ADMIN_ROLES.SUPER_ADMIN });
     if (existingSuperAdmin) {
-      console.log('Super admin already exists');
+      console.log('✅ Super admin already exists');
       return;
     }
 
-    const hashedPassword = await hashPassword('Admin@123');
+    // 🔒 SECURITY: Password must come from environment variable
+    if (!process.env.SUPER_ADMIN_PASSWORD) {
+      console.error('❌ SUPER_ADMIN_PASSWORD environment variable is required!');
+      console.error('   Please add SUPER_ADMIN_PASSWORD to your .env file');
+      return;
+    }
+    const hashedPassword = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
+
     const superAdmin = new Admin({
-      fullname: 'Super Admin',
-      email: 'admin@resqyou.com',
-      username: 'superadmin',
+      fullname: process.env.SUPER_ADMIN_FULLNAME || 'Super Admin',
+      email: process.env.SUPER_ADMIN_EMAIL || 'admin@resqyou.com',
+      username: process.env.SUPER_ADMIN_USERNAME || 'superadmin',
       password: hashedPassword,
       role: ADMIN_ROLES.SUPER_ADMIN,
-      department: 'Administration',
-      contactNumber: '+1234567890',
+      department: process.env.SUPER_ADMIN_DEPARTMENT || 'Administration',
+      contactNumber: process.env.SUPER_ADMIN_CONTACT || '',
       isActive: true
     });
 
     await superAdmin.save();
-    console.log('\nSuper Admin Created:');
-    console.log('Email: admin@resqyou.com | Username: superadmin | Password: Admin@123');
-    console.log('IMPORTANT: Change this password after first login!\n');
+
+    // 🔒 SECURITY: Only show credentials in development mode
+    if (process.env.NODE_ENV === 'development') {
+      console.log('\n⚠️  ========================================');
+      console.log('⚠️  SUPER ADMIN CREATED (DEVELOPMENT MODE)');
+      console.log('⚠️  ========================================');
+      console.log(`Email: ${superAdmin.email}`);
+      console.log(`Username: ${superAdmin.username}`);
+      console.log('Password: [Set in SUPER_ADMIN_PASSWORD env variable]');
+      console.log('⚠️  CRITICAL: Change this password after first login!');
+      console.log('⚠️  ========================================\n');
+    } else {
+      console.log('✅ Super admin created. Check SUPER_ADMIN_PASSWORD env variable.');
+    }
   } catch (error) {
-    console.error('Error creating super admin:', error.message);
+    console.error('❌ Error creating super admin:', error.message);
   }
 };
 
@@ -186,6 +278,20 @@ mongoose
   .then(async () => {
     console.log('Connected to MongoDB');
     await createSuperAdminIfNeeded();
+
+    // 🔄 Cron job: Keep server alive by refreshing MongoDB every 15 minutes
+    cron.schedule('*/15 * * * *', async () => {
+      try {
+        const SOS = require('./models/sosModel');
+        const count = await SOS.countDocuments();
+        console.log(`🔄 [Cron] Database refresh - Active connection maintained. Total SOS records: ${count}`);
+        console.log(`   Timestamp: ${new Date().toISOString()}`);
+      } catch (error) {
+        console.error('❌ [Cron] Database refresh failed:', error.message);
+      }
+    });
+
+    console.log('✅ Cron job scheduled: Database refresh every 15 minutes');
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
