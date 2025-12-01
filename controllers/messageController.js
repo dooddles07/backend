@@ -82,50 +82,9 @@ const getOrCreateConversation = async (req, res) => {
         userName: user.fullname,
         adminId: adminId || null,
         adminName,
-        lastMessage: 'Conversation started',
+        lastMessage: 'No messages yet',
         lastMessageTime: new Date()
       });
-
-      const systemUsername = process.env.SYSTEM_ADMIN_USERNAME || 'resqyou_system';
-      let systemAdmin = await Admin.findOne({ username: systemUsername });
-
-      if (!systemAdmin) {
-        // 🔒 SECURITY: Password must come from environment variable
-        const systemPassword = process.env.SYSTEM_ADMIN_PASSWORD;
-        if (!systemPassword) {
-          console.error('❌ SYSTEM_ADMIN_PASSWORD environment variable is required!');
-          return sendServerError(res, 'System configuration error');
-        }
-
-        const hashedPassword = await hashPassword(systemPassword);
-
-        systemAdmin = await Admin.create({
-          username: systemUsername,
-          password: hashedPassword,
-          fullname: process.env.SYSTEM_ADMIN_FULLNAME || 'ResqYOU Respondents',
-          email: process.env.SYSTEM_ADMIN_EMAIL || 'emergency@resqyou.com',
-          role: ADMIN_ROLES.ADMIN,
-          isActive: true
-        });
-
-        console.log(`✅ System admin created: ${systemUsername}`);
-      }
-
-      const welcomeText = `Hi ${user.fullname}! 👋\n\nYou're now connected to ResqYOU Emergency Respondents. This is a direct line for emergency assistance and urgent support.\n\nIf you need immediate help or have an emergency situation, please let us know right away. Our response team is here to assist you 24/7.`;
-
-      await Message.create({
-        conversationId: conversation._id,
-        senderType: 'admin',
-        senderId: systemAdmin._id,
-        senderModel: 'Admin',
-        text: welcomeText,
-        isRead: false
-      });
-
-      conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
-      conversation.lastMessageTime = new Date();
-      conversation.unreadCountUser = 1;
-      await conversation.save();
 
       const conversationObj = conversation.toObject();
       return res.status(200).json(conversationObj);
@@ -190,52 +149,6 @@ const getAdminConversations = async (req, res) => {
   } catch (error) {
     console.error('Error in getAdminConversations:', error);
     return sendServerError(res, 'Failed to retrieve conversations');
-  }
-};
-
-/**
- * Assign Admin to Conversation
- */
-const assignAdminToConversation = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const adminId = req.admin._id;
-    const adminName = req.admin.fullname;
-
-    const conversation = await Conversation.findById(id);
-    if (!conversation) {
-      return sendNotFound(res, 'Conversation not found');
-    }
-
-    const wasUnassigned = !conversation.adminId;
-
-    conversation.adminId = adminId;
-    conversation.adminName = adminName;
-    await conversation.save();
-
-    if (wasUnassigned) {
-      const user = await User.findById(conversation.userId);
-      const welcomeText = `Hi ${user.fullname}! 👋\n\nI'm ${adminName} from ResqYOU Emergency Response Team, and I'll be handling your case today.\n\nIf you need immediate assistance or have an emergency situation, please let me know right away. I'm here to help you 24/7.`;
-
-      await Message.create({
-        conversationId: conversation._id,
-        senderType: 'admin',
-        senderId: adminId,
-        senderModel: 'Admin',
-        text: welcomeText,
-        isRead: false
-      });
-
-      conversation.lastMessage = welcomeText.substring(0, MESSAGE.PREVIEW_LENGTH);
-      conversation.lastMessageTime = new Date();
-      conversation.unreadCountUser += 1;
-      await conversation.save();
-    }
-
-    return sendOk(res, 'Admin assigned to conversation successfully', conversation);
-  } catch (error) {
-    console.error('Error in assignAdminToConversation:', error);
-    return sendServerError(res, 'Failed to assign admin to conversation');
   }
 };
 
@@ -500,7 +413,6 @@ module.exports = {
   getOrCreateConversation,
   getUserConversations,
   getAdminConversations,
-  assignAdminToConversation,
   sendMessage,
   getConversationMessages,
   markMessagesAsRead,

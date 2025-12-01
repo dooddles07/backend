@@ -5,7 +5,6 @@ const {
   getOrCreateConversation,
   getUserConversations,
   getAdminConversations,
-  assignAdminToConversation,
   sendMessage,
   getConversationMessages,
   markMessagesAsRead,
@@ -67,7 +66,6 @@ const protectUserOrAdmin = async (req, res, next) => {
 router.post('/conversation', protectUserOrAdmin, getOrCreateConversation);
 router.get('/conversations/user', protect, getUserConversations);
 router.get('/conversations/admin', protectAdmin, getAdminConversations);
-router.put('/conversation/:id/assign', protectAdmin, assignAdminToConversation);
 router.put('/conversation/:id/archive', protectAdmin, archiveConversation);
 
 // Message Routes
